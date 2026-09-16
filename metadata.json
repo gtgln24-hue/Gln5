@@ -1,0 +1,6 @@
+{
+  "name": "GLN Quiz Bot",
+  "description": "Production-ready Telegram Group Quiz Bot for Hindi questions with subject cooldowns, admin approvals, 15-second timers, and live simulator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
