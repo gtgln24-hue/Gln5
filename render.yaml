@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: gln-quiz-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 bot.py
+    plan: free
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.13
+      - key: BOT_TOKEN
+        value: 8928910777:AAFN_BLIh_bIQPB2Pm6NBhcWgwlFYxSuEBg
+      - key: OWNER_ID
+        value: 8518332185
+      - key: DATABASE_URL
+        value: sqlite+aiosqlite:///gln_quiz.db

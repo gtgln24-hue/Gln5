@@ -101,9 +101,13 @@ def log_command_rejected(reason: str):
     )
 
 
+import asyncio
+from bot.database.queries import register_or_update_group, register_or_update_user
+
 class MessageAuditMiddleware(BaseMiddleware):
     """
-    Dispatcher middleware logging MESSAGE RECEIVED and COMMAND DETECTED for all messages.
+    Dispatcher middleware logging MESSAGE RECEIVED, COMMAND DETECTED,
+    and automatically registering every group (approved or unapproved) and bot user.
     """
     async def __call__(self, handler, event: Message, data: Dict[str, Any]) -> Any:
         text = event.text or event.caption or "<empty_or_media>"
@@ -116,5 +120,35 @@ class MessageAuditMiddleware(BaseMiddleware):
         if parsed:
             cmd_name, _, _ = parsed
             log_command_detected(command_name=cmd_name)
+
+        # Automatic registration of groups and users
+        if event.chat:
+            if event.chat.type in ["group", "supergroup"]:
+                asyncio.create_task(
+                    register_or_update_group(
+                        group_id=event.chat.id,
+                        group_name=event.chat.title or "Telegram Group",
+                        group_username=event.chat.username,
+                    )
+                )
+            elif event.chat.type == "private" and event.from_user:
+                asyncio.create_task(
+                    register_or_update_user(
+                        user_id=event.from_user.id,
+                        username=event.from_user.username,
+                        first_name=event.from_user.first_name,
+                        is_dm=True,
+                    )
+                )
+
+        if event.from_user and event.chat and event.chat.type in ["group", "supergroup"]:
+            asyncio.create_task(
+                register_or_update_user(
+                    user_id=event.from_user.id,
+                    username=event.from_user.username,
+                    first_name=event.from_user.first_name,
+                    is_dm=False,
+                )
+            )
 
         return await handler(event, data)

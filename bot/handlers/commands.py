@@ -12,6 +12,9 @@ from bot.config import settings
 from bot.database.queries import (
     is_group_approved,
     get_or_create_group,
+    register_or_update_group,
+    register_or_update_user,
+    get_all_broadcast_destinations,
     approve_group,
     get_active_session,
     get_subject_cooldown,
@@ -29,13 +32,31 @@ from bot.utils.command_parser import (
 logger = logging.getLogger(__name__)
 commands_router = Router(name="commands_router")
 
+async def safe_reply(message: Message, text: str, **kwargs):
+    """Safely replies to a message, falling back to message.answer if the original message was deleted in group."""
+    try:
+        return await message.reply(text, **kwargs)
+    except Exception:
+        try:
+            return await message.answer(text, **kwargs)
+        except Exception as e:
+            logger.warning(f"Could not send reply/answer to chat {message.chat.id}: {e}")
+            return None
+
 @commands_router.message(SafeCommand("start"))
 async def cmd_start(message: Message, bot: Bot):
     """Start command handler for direct or group chats."""
     log_handler_executed("cmd_start")
     chat = message.chat
+    user = message.from_user
     if chat.type in ["group", "supergroup"]:
-        await message.reply(
+        await register_or_update_group(
+            group_id=chat.id,
+            group_name=chat.title or "Telegram Group",
+            group_username=chat.username,
+        )
+        await safe_reply(
+            message,
             "👋 <b>Welcome to GLN Quiz Bot!</b>\n\n"
             "An authorized Group Admin or Owner can start a quiz anytime with:\n"
             "👉 /choose\n\n"
@@ -43,7 +64,15 @@ async def cmd_start(message: Message, bot: Bot):
             parse_mode="HTML",
         )
     else:
-        await message.reply(
+        if user:
+            await register_or_update_user(
+                user_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                is_dm=True,
+            )
+        await safe_reply(
+            message,
             "🎓 <b>GLN Quiz Bot</b>\n\n"
             "I am a specialized Telegram Group Quiz Bot supporting Hindi language questions across 8 subjects:\n"
             "1. 📖 Hindi\n"
@@ -77,7 +106,8 @@ async def cmd_choose(message: Message, bot: Bot):
     # Check chat type: Normal groups and supergroups supported
     if chat.type not in ["group", "supergroup"]:
         log_command_rejected("/choose invoked outside group/supergroup")
-        await message.reply(
+        await safe_reply(
+            message,
             "⚠️ <i>This command can only be used inside a Telegram group.</i>\n"
             "Add me to your group, promote me to Administrator, and send /choose.",
             parse_mode="HTML",
@@ -88,18 +118,28 @@ async def cmd_choose(message: Message, bot: Bot):
     bot_is_admin = await is_bot_admin(bot, chat.id)
     if not bot_is_admin:
         log_command_rejected(f"Bot is not admin in group {chat.id}")
-        await message.reply(
+        await safe_reply(
+            message,
             "⚠️ <b>PLEASE MAKE ME ADMIN IN YOUR GROUP</b>\n\n"
             "I need administrator rights to manage 15s timers and quizzes properly.",
             parse_mode="HTML",
         )
         return
 
+    # Ensure group is registered regardless of approval status
+    await register_or_update_group(
+        group_id=chat.id,
+        group_name=chat.title or "Telegram Group",
+        group_username=chat.username,
+        is_admin=bot_is_admin,
+    )
+
     # 2. Check if group is approved by Bot Owner
     approved = await is_group_approved(chat.id)
     if not approved:
         log_command_rejected(f"Group {chat.id} is not approved")
-        await message.reply(
+        await safe_reply(
+            message,
             "⚠️ <b>PLEASE CONTACT MY OWNER AND GET YOUR GROUP APPROVED.</b>\n\n"
             f"Group ID: <code>{chat.id}</code>",
             parse_mode="HTML",
@@ -110,7 +150,8 @@ async def cmd_choose(message: Message, bot: Bot):
     is_admin = await is_group_admin_or_owner(bot, chat.id, user.id)
     if not is_admin:
         log_command_rejected(f"User {user.id} (@{user.username}) is not group admin or owner")
-        await message.reply(
+        await safe_reply(
+            message,
             "❌ Only Group Admins or Owners can use this command.",
             parse_mode="HTML",
         )
@@ -120,7 +161,8 @@ async def cmd_choose(message: Message, bot: Bot):
     active = quiz_manager.get_active(chat.id)
     if active:
         log_command_rejected(f"Quiz already running in group {chat.id} (Session: {active.session_id})")
-        await message.reply(
+        await safe_reply(
+            message,
             "⚠️ <b>A quiz is already running in this group.</b>\n"
             "Use /stopgln to end it before starting a new one.",
             parse_mode="HTML",
@@ -150,7 +192,8 @@ async def cmd_choose(message: Message, bot: Bot):
     ]
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    await message.reply(
+    await safe_reply(
+        message,
         "📚 <b>SELECT SUBJECT</b>\n\n"
         "Please select a subject to start the 100-question quiz session:",
         parse_mode="HTML",
@@ -308,25 +351,38 @@ async def cmd_broadcast(message: Message, bot: Bot, command_args_str: str = ""):
         )
         return
 
-    # 3. Store preview and display confirmation
+    # 3. Fetch all broadcast destinations to show accurate targets (both approved & unapproved groups + users)
+    destinations = await get_all_broadcast_destinations()
+    group_ids = destinations.get("groups", [])
+    user_ids = destinations.get("users", [])
+    approved_count = destinations.get("approved_count", 0)
+    unapproved_count = destinations.get("unapproved_count", 0)
+    total_targets = len(group_ids) + len(user_ids)
+
     preview_id = broadcast_service.create_preview(user.id, broadcast_text)
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ SEND", callback_data=f"bcast_send:{preview_id}"),
+                InlineKeyboardButton(text="✅ SEND TO ALL", callback_data=f"bcast_send:{preview_id}"),
                 InlineKeyboardButton(text="❌ CANCEL", callback_data=f"bcast_cancel:{preview_id}"),
             ]
         ]
     )
 
     preview_message = (
-        f"📢 BROADCAST PREVIEW\n\n"
+        f"📢 <b>BROADCAST PREVIEW</b>\n\n"
+        f"<b>Message Content:</b>\n"
         f"{broadcast_text}\n\n"
-        f"Are you sure you want to send this?"
+        f"🎯 <b>Audience / Destinations:</b>\n"
+        f"• 👥 <b>Total Groups:</b> {len(group_ids)} ({approved_count} approved, {unapproved_count} unapproved)\n"
+        f"• 👤 <b>Bot Users:</b> {len(user_ids)}\n"
+        f"• 📦 <b>Combined Total Targets:</b> {total_targets}\n\n"
+        f"<i>Message will be sent to EVERY group (approved or not) and all bot users.</i>\n\n"
+        f"Are you sure you want to broadcast now?"
     )
 
-    await message.reply(preview_message, reply_markup=keyboard)
+    await message.reply(preview_message, reply_markup=keyboard, parse_mode="HTML")
 
 @commands_router.callback_query(F.data.startswith("bcast_cancel:"))
 async def on_broadcast_cancel(call: CallbackQuery):
@@ -368,15 +424,19 @@ async def on_broadcast_send(call: CallbackQuery, bot: Bot):
     await call.answer("Starting broadcast...")
     try:
         await call.message.edit_text(
-            f"📢 BROADCAST STARTED\n\n"
-            f"Message:\n"
-            f"{message_text}"
+            f"📢 <b>BROADCAST STARTED</b>\n\n"
+            f"<b>Message:</b>\n"
+            f"{message_text}\n\n"
+            f"⏳ <i>Broadcasting to all groups and users in the background...</i>",
+            parse_mode="HTML",
         )
     except Exception:
         await call.message.reply(
-            f"📢 BROADCAST STARTED\n\n"
-            f"Message:\n"
-            f"{message_text}"
+            f"📢 <b>BROADCAST STARTED</b>\n\n"
+            f"<b>Message:</b>\n"
+            f"{message_text}\n\n"
+            f"⏳ <i>Broadcasting to all groups and users in the background...</i>",
+            parse_mode="HTML",
         )
 
     # Execute asynchronous broadcasting to existing database destinations
@@ -384,22 +444,26 @@ async def on_broadcast_send(call: CallbackQuery, bot: Bot):
 
     # Deliver final statistics strictly to the Bot Owner
     stats_text = (
-        f"✅ BROADCAST COMPLETED\n\n"
-        f"📊 Statistics\n\n"
-        f"Total: {stats['total']}\n"
-        f"✅ Sent: {stats['sent']}\n"
-        f"❌ Failed: {stats['failed']}"
+        f"✅ <b>BROADCAST COMPLETED</b>\n\n"
+        f"📊 <b>Detailed Delivery Report:</b>\n"
+        f"• 👥 <b>Groups Delivered:</b> {stats.get('groups_sent', 0)} / {stats.get('groups_count', 0)}\n"
+        f"  └ <i>(Includes approved: {stats.get('approved_groups_count', 0)}, unapproved: {stats.get('unapproved_groups_count', 0)})</i>\n"
+        f"• 👤 <b>Bot Users Delivered:</b> {stats.get('users_sent', 0)} / {stats.get('users_count', 0)}\n"
+        f"• 📦 <b>Total Delivered:</b> {stats.get('sent', 0)} / {stats.get('total', 0)}\n"
+        f"• ❌ <b>Failed / Inaccessible:</b> {stats.get('failed', 0)}\n\n"
+        f"<i>Delivered to all active groups and users regardless of approval status.</i>"
     )
 
     try:
         await bot.send_message(
             chat_id=user.id,
             text=stats_text,
+            parse_mode="HTML",
         )
     except Exception as e:
         logger.warning(f"Could not send broadcast stats directly to owner chat {user.id}: {e}")
         try:
-            await call.message.reply(stats_text)
+            await call.message.reply(stats_text, parse_mode="HTML")
         except Exception:
             pass
 

@@ -10,6 +10,7 @@ from aiogram.types import Message, ChatMemberUpdated
 from aiogram.filters import Command, ChatMemberUpdatedFilter, KICKED, LEFT, RESTRICTED, MEMBER, ADMINISTRATOR
 from bot.config import settings
 from bot.database.queries import (
+    register_or_update_group,
     get_or_create_group,
     is_group_approved,
     approve_group,
@@ -28,7 +29,12 @@ async def on_bot_promoted_admin(event: ChatMemberUpdated, bot: Bot):
         return
 
     logger.info(f"Bot promoted to admin in group {chat.id} ({chat.title})")
-    await set_group_admin_status(chat.id, is_admin=True)
+    await register_or_update_group(
+        group_id=chat.id,
+        group_name=chat.title or "Unnamed Group",
+        group_username=chat.username,
+        is_admin=True,
+    )
 
     # Check if approved
     approved = await is_group_approved(chat.id)

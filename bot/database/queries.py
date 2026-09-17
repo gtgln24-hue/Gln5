@@ -12,6 +12,7 @@ from bot.database.models import (
     Group,
     ApprovedGroup,
     User,
+    BotDMUser,
     QuizSession,
     QuizQuestion,
     UserAnswer,
@@ -22,6 +23,55 @@ from bot.database.models import (
 )
 from bot.config import settings
 
+async def register_or_update_group(
+    group_id: int,
+    group_name: str,
+    group_username: Optional[str] = None,
+    member_count: int = 0,
+    added_by_user: Optional[str] = None,
+    is_admin: Optional[bool] = None,
+) -> Group:
+    """
+    Registers or updates any group (approved OR unapproved) into the database.
+    Guarantees that every group the bot encounters is stored for broadcasts and management.
+    """
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Group).where(Group.group_id == group_id))
+        group = result.scalar_one_or_none()
+
+        if not group:
+            app_res = await session.execute(
+                select(ApprovedGroup).where(ApprovedGroup.group_id == group_id)
+            )
+            is_approved = app_res.scalar_one_or_none() is not None
+
+            group = Group(
+                group_id=group_id,
+                group_name=group_name or "Telegram Group",
+                group_username=group_username,
+                member_count=member_count,
+                added_by_user=added_by_user,
+                is_admin=bool(is_admin) if is_admin is not None else False,
+                is_approved=is_approved,
+                added_at=datetime.utcnow(),
+            )
+            session.add(group)
+        else:
+            if group_name and group_name != "Telegram Group":
+                group.group_name = group_name
+            if group_username:
+                group.group_username = group_username
+            if member_count > 0:
+                group.member_count = member_count
+            if is_admin is not None:
+                group.is_admin = is_admin
+            if added_by_user:
+                group.added_by_user = added_by_user
+
+        await session.commit()
+        await session.refresh(group)
+        return group
+
 async def get_or_create_group(
     group_id: int,
     group_name: str,
@@ -30,41 +80,99 @@ async def get_or_create_group(
     added_by_user: Optional[str] = None,
     is_admin: bool = False,
 ) -> Group:
+    return await register_or_update_group(
+        group_id=group_id,
+        group_name=group_name,
+        group_username=group_username,
+        member_count=member_count,
+        added_by_user=added_by_user,
+        is_admin=is_admin,
+    )
+
+async def register_or_update_user(
+    user_id: int,
+    username: Optional[str] = None,
+    first_name: Optional[str] = None,
+    is_dm: bool = False,
+) -> User:
+    """
+    Registers or updates any user who interacts with the bot.
+    If is_dm=True (user chatting in private), marks them in BotDMUser so broadcasts can reach them.
+    """
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(Group).where(Group.group_id == group_id))
-        group = result.scalar_one_or_none()
+        # 1. Update or create in User table
+        result = await session.execute(select(User).where(User.user_id == user_id))
+        user = result.scalar_one_or_none()
 
-        if not group:
-            # Check if pre-approved
-            app_res = await session.execute(
-                select(ApprovedGroup).where(ApprovedGroup.group_id == group_id)
+        if not user:
+            user = User(
+                user_id=user_id,
+                username=username,
+                first_name=first_name,
+                total_points=0,
+                correct_answers=0,
+                wrong_answers=0,
+                quizzes_participated=0,
+                updated_at=datetime.utcnow(),
             )
-            is_approved = app_res.scalar_one_or_none() is not None
-
-            group = Group(
-                group_id=group_id,
-                group_name=group_name,
-                group_username=group_username,
-                member_count=member_count,
-                added_by_user=added_by_user,
-                is_admin=is_admin,
-                is_approved=is_approved,
-                added_at=datetime.utcnow(),
-            )
-            session.add(group)
-            await session.commit()
-            await session.refresh(group)
+            session.add(user)
         else:
-            # Update current attributes
-            group.group_name = group_name
-            if group_username:
-                group.group_username = group_username
-            if member_count > 0:
-                group.member_count = member_count
-            group.is_admin = is_admin
-            await session.commit()
-            await session.refresh(group)
-        return group
+            if username:
+                user.username = username
+            if first_name:
+                user.first_name = first_name
+            user.updated_at = datetime.utcnow()
+
+        # 2. If interacting in private DM, record in BotDMUser
+        if is_dm:
+            dm_res = await session.execute(select(BotDMUser).where(BotDMUser.user_id == user_id))
+            dm_user = dm_res.scalar_one_or_none()
+            if not dm_user:
+                dm_user = BotDMUser(
+                    user_id=user_id,
+                    username=username,
+                    first_name=first_name,
+                    started_at=datetime.utcnow(),
+                    last_seen=datetime.utcnow(),
+                )
+                session.add(dm_user)
+            else:
+                if username:
+                    dm_user.username = username
+                if first_name:
+                    dm_user.first_name = first_name
+                dm_user.last_seen = datetime.utcnow()
+
+        await session.commit()
+        await session.refresh(user)
+        return user
+
+async def sync_approved_groups_to_groups():
+    """
+    Ensures that every approved group in approved_groups exists in the groups table as well.
+    """
+    async with AsyncSessionLocal() as session:
+        app_res = await session.execute(select(ApprovedGroup))
+        approved_list = app_res.scalars().all()
+        for app in approved_list:
+            grp_res = await session.execute(select(Group).where(Group.group_id == app.group_id))
+            grp = grp_res.scalar_one_or_none()
+            if not grp:
+                grp = Group(
+                    group_id=app.group_id,
+                    group_name=f"Approved Group {app.group_id}",
+                    is_approved=True,
+                    approved_at=app.approved_at,
+                    approved_by_owner=app.approved_by_owner,
+                    added_at=app.approved_at or datetime.utcnow(),
+                )
+                session.add(grp)
+            else:
+                if not grp.is_approved:
+                    grp.is_approved = True
+                    grp.approved_at = app.approved_at
+                    grp.approved_by_owner = app.approved_by_owner
+        await session.commit()
 
 async def is_group_approved(group_id: int) -> bool:
     async with AsyncSessionLocal() as session:
@@ -87,21 +195,41 @@ async def approve_group(group_id: int, owner_id: int) -> bool:
             )
             session.add(app)
 
-        # Update group table if present
+        # Update or insert into group table
         grp_res = await session.execute(select(Group).where(Group.group_id == group_id))
         group = grp_res.scalar_one_or_none()
         if group:
             group.is_approved = True
             group.approved_at = datetime.utcnow()
             group.approved_by_owner = owner_id
+        else:
+            group = Group(
+                group_id=group_id,
+                group_name=f"Approved Group {group_id}",
+                is_approved=True,
+                approved_at=datetime.utcnow(),
+                approved_by_owner=owner_id,
+                added_at=datetime.utcnow(),
+            )
+            session.add(group)
         await session.commit()
         return True
 
 async def set_group_admin_status(group_id: int, is_admin: bool):
     async with AsyncSessionLocal() as session:
-        await session.execute(
-            update(Group).where(Group.group_id == group_id).values(is_admin=is_admin)
-        )
+        grp_res = await session.execute(select(Group).where(Group.group_id == group_id))
+        group = grp_res.scalar_one_or_none()
+        if group:
+            group.is_admin = is_admin
+        else:
+            group = Group(
+                group_id=group_id,
+                group_name="Telegram Group",
+                is_admin=is_admin,
+                is_approved=False,
+                added_at=datetime.utcnow(),
+            )
+            session.add(group)
         await session.commit()
 
 async def get_subject_cooldown(group_id: int, subject: str) -> Optional[datetime]:
@@ -568,22 +696,29 @@ async def update_leaderboard_from_session(session_id: str, group_id: int):
         await session.commit()
 
 
-async def get_all_broadcast_destinations() -> Dict[str, List[int]]:
+async def get_all_broadcast_destinations() -> Dict[str, Any]:
     """
-    Collects all unique group and user IDs from existing database tables.
-    Groups: Collected from Group and ApprovedGroup tables.
-    Users: Collected from User, GroupLeaderboard, and UserAnswer tables.
-    Deduplicates IDs and keeps groups and users separately identifiable.
+    Collects all unique group and user IDs from the database.
+    Groups: ALL groups from Group (approved & unapproved), ApprovedGroup, and QuizSession.
+    Users: All users who have interacted with the bot in DM (BotDMUser) and User table.
+    Guarantees that unapproved groups and all active bot users are included.
     """
     groups_set = set()
+    dm_users_set = set()
     users_set = set()
+    approved_count = 0
+    unapproved_count = 0
 
     async with AsyncSessionLocal() as session:
-        # 1. Collect from Group table
-        grp_res = await session.execute(select(Group.group_id))
-        for gid in grp_res.scalars().all():
+        # 1. Collect from Group table (both approved and unapproved)
+        grp_res = await session.execute(select(Group.group_id, Group.is_approved))
+        for gid, is_app in grp_res.all():
             if gid is not None:
                 groups_set.add(int(gid))
+                if is_app:
+                    approved_count += 1
+                else:
+                    unapproved_count += 1
 
         # Collect from ApprovedGroup table
         app_res = await session.execute(select(ApprovedGroup.group_id))
@@ -591,25 +726,35 @@ async def get_all_broadcast_destinations() -> Dict[str, List[int]]:
             if gid is not None:
                 groups_set.add(int(gid))
 
-        # 2. Collect from User table
+        # Collect from past QuizSessions
+        try:
+            sess_res = await session.execute(select(QuizSession.group_id))
+            for gid in sess_res.scalars().all():
+                if gid is not None:
+                    groups_set.add(int(gid))
+        except Exception:
+            pass
+
+        # 2. Collect DM users (users who chatted with bot in private)
+        try:
+            dm_res = await session.execute(select(BotDMUser.user_id))
+            for uid in dm_res.scalars().all():
+                if uid is not None:
+                    dm_users_set.add(int(uid))
+                    users_set.add(int(uid))
+        except Exception:
+            pass
+
+        # 3. Collect from User table
         usr_res = await session.execute(select(User.user_id))
         for uid in usr_res.scalars().all():
-            if uid is not None:
-                users_set.add(int(uid))
-
-        # Collect from GroupLeaderboard table
-        lb_res = await session.execute(select(GroupLeaderboard.user_id))
-        for uid in lb_res.scalars().all():
-            if uid is not None:
-                users_set.add(int(uid))
-
-        # Collect from UserAnswer table
-        ans_res = await session.execute(select(UserAnswer.user_id))
-        for uid in ans_res.scalars().all():
             if uid is not None:
                 users_set.add(int(uid))
 
     return {
         "groups": sorted(list(groups_set)),
         "users": sorted(list(users_set)),
+        "dm_users": sorted(list(dm_users_set)),
+        "approved_count": approved_count,
+        "unapproved_count": unapproved_count,
     }

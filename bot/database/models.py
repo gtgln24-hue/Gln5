@@ -55,6 +55,16 @@ class User(Base):
     quizzes_participated = Column(Integer, default=0)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+class BotDMUser(Base):
+    """Stores every user who has initiated a private conversation with the bot."""
+    __tablename__ = "bot_dm_users"
+
+    user_id = Column(BigInteger, primary_key=True, index=True)
+    username = Column(String(255), nullable=True)
+    first_name = Column(String(255), nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    last_seen = Column(DateTime, default=datetime.utcnow)
+
 class QuizSession(Base):
     __tablename__ = "quiz_sessions"
 

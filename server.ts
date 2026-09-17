@@ -59,8 +59,13 @@ function getBotProcessInfo(): { running: boolean; pid: number | null; autoRunEna
     const output = execSync("pgrep -f '[p]ython3 bot.py' || true").toString().trim();
     if (output) {
       const pids = output.split("\n").map((p) => parseInt(p.trim(), 10)).filter(Boolean);
-      if (pids.length > 0) {
-        return { running: true, pid: pids[0], autoRunEnabled: botAutoRunEnabled };
+      for (const p of pids) {
+        try {
+          const stat = execSync(`ps -o state= -p ${p} || true`).toString().trim();
+          if (stat && !stat.startsWith("Z") && !stat.startsWith("X")) {
+            return { running: true, pid: p, autoRunEnabled: botAutoRunEnabled };
+          }
+        } catch (err) {}
       }
     }
   } catch (e) {
@@ -71,11 +76,26 @@ function getBotProcessInfo(): { running: boolean; pid: number | null; autoRunEna
 
 function startBotProcess() {
   botAutoRunEnabled = true;
-  const current = getBotProcessInfo();
-  if (current.running) {
-    if (!botStartedAt) botStartedAt = Date.now();
-    return { ...current, autoRunEnabled: true };
+  if (respawnTimeout) {
+    clearTimeout(respawnTimeout);
+    respawnTimeout = null;
   }
+
+  // 1. Check if our existing tracked child process is genuinely alive and healthy
+  if (activeBotChild && !activeBotChild.killed && activeBotChild.exitCode === null && activeBotChild.pid) {
+    try {
+      process.kill(activeBotChild.pid, 0);
+      if (!botStartedAt) botStartedAt = Date.now();
+      return { running: true, pid: activeBotChild.pid, autoRunEnabled: true };
+    } catch (e) {
+      activeBotChild = null;
+    }
+  }
+
+  // 2. Kill any stale/zombie python bot instances before starting fresh
+  try {
+    execSync("pkill -9 -f '[p]ython3 bot.py' || true");
+  } catch (e) {}
 
   try {
     const outLog = fs.openSync(path.join(process.cwd(), "bot.log"), "a");
@@ -99,13 +119,17 @@ function startBotProcess() {
     child.on("error", (err) => {
       console.error("[Bot Supervisor] Child process error:", err);
       lastBotError = String(err);
-      activeBotChild = null;
+      if (activeBotChild === child) {
+        activeBotChild = null;
+      }
       if (botAutoRunEnabled) scheduleRespawn();
     });
 
     child.on("exit", (code, signal) => {
       console.warn(`[Bot Supervisor] python3 bot.py exited (code: ${code}, signal: ${signal}).`);
-      activeBotChild = null;
+      if (activeBotChild === child) {
+        activeBotChild = null;
+      }
       botRestartCount++;
       if (botAutoRunEnabled) scheduleRespawn();
     });
@@ -127,14 +151,27 @@ function stopBotProcess() {
     respawnTimeout = null;
   }
   if (activeBotChild) {
+    activeBotChild.removeAllListeners();
     try {
-      activeBotChild.kill("SIGTERM");
+      activeBotChild.kill("SIGKILL");
     } catch (e) {}
     activeBotChild = null;
   }
   try {
     execSync("pkill -9 -f '[p]ython3 bot.py' || true");
   } catch (e) {}
+
+  // Double check process has died
+  for (let i = 0; i < 5; i++) {
+    try {
+      const out = execSync("pgrep -f '[p]ython3 bot.py' || true").toString().trim();
+      if (!out) break;
+      execSync("pkill -9 -f '[p]ython3 bot.py' || true");
+    } catch (e) {
+      break;
+    }
+  }
+
   botStartedAt = null;
   return { running: false, pid: null, autoRunEnabled: false };
 }
@@ -162,10 +199,7 @@ function scheduleRespawn() {
 }
 
 function restartBotProcess() {
-  botAutoRunEnabled = true;
-  try {
-    execSync("pkill -f 'python3 bot.py' || true");
-  } catch (e) {}
+  stopBotProcess();
   botRestartCount++;
   return startBotProcess();
 }

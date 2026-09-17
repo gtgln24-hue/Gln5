@@ -363,6 +363,114 @@ git push -u origin main
         </pre>
       </div>
 
+      {/* Step 4: Render.com 100% Free 24x7 Hosting Setup */}
+      <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-950 rounded-3xl p-6 border-2 border-emerald-500/70 shadow-2xl space-y-4 text-slate-100">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-indigo-800/60">
+          <div className="flex items-center gap-2.5">
+            <span className="w-8 h-8 rounded-xl bg-emerald-400 text-slate-950 flex items-center justify-center text-sm font-black shadow-md">
+              <Server className="w-4 h-4" />
+            </span>
+            <div>
+              <h3 className="text-base font-black text-white flex items-center gap-2">
+                <span>Render.com 24x7 Free Hosting Guide</span>
+                <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/40">
+                  No Payment Card Required
+                </span>
+              </h3>
+              <p className="text-xs text-indigo-300">
+                Render पर बिना किसी विफलता के बॉट चलाने के लिए तैयार किया गया कॉन्फ़िगरेशन
+              </p>
+            </div>
+          </div>
+
+          <a
+            href="https://dashboard.render.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950 transition-colors shadow-sm self-start sm:self-auto cursor-pointer"
+          >
+            <span>Open Render Dashboard</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        </div>
+
+        {/* Why it failed before & How it is fixed now */}
+        <div className="p-3.5 rounded-2xl bg-indigo-950/80 border border-emerald-500/40 text-xs space-y-1.5">
+          <div className="font-bold text-emerald-400 flex items-center gap-1.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>पहला फेलियर क्यों हुआ था और अब कैसे ठीक है?</span>
+          </div>
+          <p className="text-indigo-200 leading-relaxed">
+            Render के <b>Web Service (Free Tier)</b> पर अगर कोई बैकएंड HTTP पोर्ट नहीं खोलता, तो Render <i>"Port scan timeout reached"</i> देकर डिप्लॉयमेंट को <b>Failed</b> कर देता है। हमने <code className="text-amber-300 font-mono">bot.py</code> में एक हल्का <b>Render HTTP Health Server</b> जोड़ दिया है जो Render के <code className="text-amber-300 font-mono">$PORT</code> पर तुरंत <code className="text-emerald-400 font-mono">200 OK</code> रिस्पॉन्स देता है। अब Render पर आपका डिप्लॉय तुरंत <b>Live 🎉</b> हो जाएगा!
+          </p>
+        </div>
+
+        {/* Step-by-Step Settings */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+          <div className="p-4 rounded-2xl bg-indigo-950/90 border border-indigo-800 space-y-2.5">
+            <h4 className="font-bold text-amber-300 uppercase tracking-wider text-[11px]">
+              Render Service Settings:
+            </h4>
+            <div className="space-y-1.5 font-mono">
+              <div className="flex justify-between py-1 border-b border-indigo-900/60">
+                <span className="text-indigo-400">Service Type:</span>
+                <span className="text-white font-bold">Web Service (Free)</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-indigo-900/60">
+                <span className="text-indigo-400">Language:</span>
+                <span className="text-white font-bold">Python 3</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-indigo-900/60">
+                <span className="text-indigo-400">Build Command:</span>
+                <span className="text-amber-300 font-bold">pip install -r requirements.txt</span>
+              </div>
+              <div className="flex justify-between py-1">
+                <span className="text-indigo-400">Start Command:</span>
+                <span className="text-emerald-400 font-bold">python3 bot.py</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-indigo-950/90 border border-indigo-800 space-y-2.5">
+            <h4 className="font-bold text-amber-300 uppercase tracking-wider text-[11px]">
+              Environment Variables (Render Dashboard):
+            </h4>
+            <div className="space-y-1.5 font-mono text-[11px]">
+              <div className="flex justify-between py-1 border-b border-indigo-900/60">
+                <span className="text-indigo-300">BOT_TOKEN</span>
+                <span className="text-amber-300 truncate max-w-[170px]" title="8928910777:AAFN_BLIh_bIQPB2Pm6NBhcWgwlFYxSuEBg">
+                  8928910777:AAFN_...
+                </span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-indigo-900/60">
+                <span className="text-indigo-300">OWNER_ID</span>
+                <span className="text-emerald-400 font-bold">8518332185</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-indigo-900/60">
+                <span className="text-indigo-300">PYTHON_VERSION</span>
+                <span className="text-white font-bold">3.10.13</span>
+              </div>
+              <div className="flex justify-between py-1">
+                <span className="text-indigo-300">DATABASE_URL</span>
+                <span className="text-indigo-200">sqlite+aiosqlite:///gln_quiz.db</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 1-Click Render Blueprint notice */}
+        <div className="p-3.5 rounded-2xl bg-indigo-900/40 border border-indigo-700/60 flex items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="px-2 py-0.5 rounded bg-amber-400 text-indigo-950 font-black text-[10px]">
+              1-CLICK
+            </span>
+            <span className="text-indigo-200">
+              ZIP फ़ाइल में <code className="text-amber-300 font-mono">render.yaml</code> और <code className="text-amber-300 font-mono">Procfile</code> पहले से मौजूद है! GitHub पर पुश करके Render Blueprint से सीधे 1-क्लिक में चालू कर सकते हैं।
+            </span>
+          </div>
+        </div>
+      </div>
+
       {/* Commands Summary Table */}
       <div className="bg-indigo-900/60 backdrop-blur-md rounded-3xl p-6 border border-indigo-700/80 shadow-xl space-y-3 text-slate-100">
         <h3 className="text-sm font-bold text-white uppercase tracking-wider">

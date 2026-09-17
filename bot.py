@@ -41,6 +41,50 @@ logging.basicConfig(
 )
 logger = logging.getLogger("GLNQuizBot")
 
+async def start_render_health_server():
+    """
+    Render.com Web Service Port Listener:
+    Render Free Web Services require the application to listen on $PORT (default 10000).
+    If no HTTP server binds to $PORT, Render times out with 'Port scan timeout reached'.
+    This lightweight server responds with 200 OK on '/', '/health', and '/status'.
+    """
+    port_str = os.getenv("PORT") or os.getenv("SERVER_PORT")
+    is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID") or (port_str and port_str != "3000"))
+    
+    # If running inside local preview environment with Express on port 3000, do not conflict with port 3000
+    if not is_render and (not port_str or port_str == "3000"):
+        return
+
+    port = int(port_str) if (port_str and port_str.isdigit()) else 10000
+    host = "0.0.0.0"
+
+    try:
+        from aiohttp import web
+        
+        async def handle_health(request):
+            return web.json_response({
+                "status": "online",
+                "bot": "GLN Quiz Bot",
+                "username": "@Glnquizbot",
+                "owner_id": settings.OWNER_ID,
+                "service": "active",
+                "platform": "Render Web Service",
+                "message": "GLN Quiz Bot is running 24x7!"
+            })
+
+        app = web.Application()
+        app.router.add_get("/", handle_health)
+        app.router.add_get("/health", handle_health)
+        app.router.add_get("/status", handle_health)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, host, port)
+        await site.start()
+        logger.info(f"✅ Render Web Service HTTP Health Server listening on http://{host}:{port}/")
+    except Exception as e:
+        logger.warning(f"Render Web Service port binding note: {e}")
+
 async def main():
     logger.info("Initializing GLN Quiz Bot...")
 
@@ -117,11 +161,14 @@ async def main():
     logger.info("Checking for active quiz sessions to recover after startup...")
     await quiz_manager.recover_active_quizzes(bot)
 
-    # 8. 24x7 Telegram Long-Polling Loop with Auto-Recovery
+    # 8. 24x7 Telegram Long-Polling Loop with Auto-Recovery & Render Health Server
     try:
         await bot.delete_webhook(drop_pending_updates=False)
     except Exception as e:
         logger.warning(f"Webhook reset check: {e}")
+
+    # Start Render Web Service port binder so Render's health scan succeeds immediately
+    asyncio.create_task(start_render_health_server())
 
     logger.info("GLN Quiz Bot 24x7 polling loop active. Waiting for group commands...")
 

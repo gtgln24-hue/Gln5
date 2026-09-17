@@ -17,7 +17,7 @@ from aiogram.exceptions import (
     TelegramNotFound,
     TelegramAPIError,
 )
-from bot.database.queries import get_all_broadcast_destinations
+from bot.database.queries import get_all_broadcast_destinations, register_or_update_group
 
 logger = logging.getLogger("GLNBroadcastSystem")
 
@@ -54,11 +54,12 @@ class BroadcastService:
     async def execute_broadcast(self, bot: Bot, owner_id: int, message_text: str) -> Dict[str, Any]:
         """
         Executes asynchronous broadcasting to all valid database destinations:
-        1. Collects unique group and user destinations from existing database.
+        1. Collects unique group (approved & unapproved) and user destinations from database.
         2. Applies rate-limiting (0.05s delay between messages).
         3. Catches flood-wait (TelegramRetryAfter), respects wait time, and resumes.
-        4. Catches individual chat errors (blocked, kicked, deleted) without stopping.
-        5. Logs audit details strictly without exposing secrets.
+        4. Handles group migration to supergroups automatically.
+        5. Falls back to plain text if HTML entities are malformed.
+        6. Logs audit details strictly without exposing secrets.
         """
         async with self._broadcast_lock:
             self.is_broadcasting = True
@@ -67,11 +68,10 @@ class BroadcastService:
                 group_ids = destinations.get("groups", [])
                 user_ids = destinations.get("users", [])
 
-                # Merge and deduplicate all valid destinations
+                # Merge and deduplicate all destinations (groups first, then users)
                 all_targets = list(dict.fromkeys(group_ids + user_ids))
                 total = len(all_targets)
 
-                # Required Audit Logging
                 logger.info(
                     f"\n[BROADCAST AUDIT]\n"
                     f"event: broadcast started\n"
@@ -81,15 +81,20 @@ class BroadcastService:
 
                 sent = 0
                 failed = 0
+                groups_sent = 0
+                groups_failed = 0
+                users_sent = 0
+                users_failed = 0
 
                 for target_id in all_targets:
+                    is_group = (target_id < 0)
                     # Controlled rate limiting to stay well within Telegram limits (max ~20-30 msg/sec)
                     await asyncio.sleep(0.05)
 
                     success = False
-                    for attempt in range(2):
+                    for attempt in range(3):
                         try:
-                            # Try HTML formatting first
+                            # 1. Attempt sending with HTML formatting first
                             try:
                                 await bot.send_message(
                                     chat_id=target_id,
@@ -98,59 +103,88 @@ class BroadcastService:
                                     disable_web_page_preview=True,
                                 )
                             except TelegramBadRequest as b_err:
-                                # If HTML tags were malformed in owner's raw text, fallback to plain text
-                                if "can't parse entities" in str(b_err).lower() or "unsupported start tag" in str(b_err).lower():
+                                err_str = str(b_err).lower()
+                                # Handle group upgraded to supergroup
+                                if hasattr(b_err, "parameters") and b_err.parameters and b_err.parameters.migrate_to_chat_id:
+                                    migrated_id = b_err.parameters.migrate_to_chat_id
+                                    logger.info(f"[BROADCAST MIGRATE] Group {target_id} upgraded to supergroup {migrated_id}")
+                                    try:
+                                        await register_or_update_group(
+                                            group_id=migrated_id,
+                                            group_name=f"Migrated Supergroup {migrated_id}",
+                                        )
+                                    except Exception:
+                                        pass
+                                    # Send to new supergroup ID
+                                    await bot.send_message(
+                                        chat_id=migrated_id,
+                                        text=message_text,
+                                        parse_mode="HTML",
+                                        disable_web_page_preview=True,
+                                    )
+                                # Fallback to plain text on ANY entity or markup error
+                                else:
                                     await bot.send_message(
                                         chat_id=target_id,
                                         text=message_text,
                                         parse_mode=None,
                                         disable_web_page_preview=True,
                                     )
-                                else:
-                                    raise b_err
 
                             success = True
                             sent += 1
+                            if is_group:
+                                groups_sent += 1
+                            else:
+                                users_sent += 1
                             break
 
                         except TelegramRetryAfter as e:
-                            # Telegram flood wait - respect requested sleep time and continue
                             wait_time = getattr(e, "retry_after", 5)
                             logger.warning(
-                                f"[BROADCAST RATE LIMIT] Telegram flood wait received. Sleeping for {wait_time}s before resuming..."
+                                f"[BROADCAST RATE LIMIT] Telegram flood wait. Sleeping {wait_time}s before resuming..."
                             )
                             await asyncio.sleep(wait_time + 1)
-                            # Retry after waiting
                             continue
 
-                        except (TelegramForbiddenError, TelegramNotFound, TelegramBadRequest) as chat_err:
-                            # Chat blocked, deleted, or bot kicked out. Log and continue with next destination.
+                        except TelegramForbiddenError as f_err:
                             logger.warning(
-                                f"[BROADCAST FAILED DESTINATION] chat_id={target_id} reason={chat_err}"
+                                f"[BROADCAST FORBIDDEN] target_id={target_id} (is_group={is_group}): {f_err}"
+                            )
+                            break
+
+                        except (TelegramNotFound, TelegramBadRequest) as chat_err:
+                            logger.warning(
+                                f"[BROADCAST CHAT ERROR] target_id={target_id} (is_group={is_group}): {chat_err}"
                             )
                             break
 
                         except TelegramAPIError as api_err:
                             logger.warning(
-                                f"[BROADCAST API ERROR] chat_id={target_id} reason={api_err}"
+                                f"[BROADCAST API ERROR] target_id={target_id}: {api_err}"
                             )
                             break
 
                         except Exception as unexpected:
                             logger.error(
-                                f"[BROADCAST UNEXPECTED ERROR] chat_id={target_id} reason={unexpected}"
+                                f"[BROADCAST UNEXPECTED ERROR] target_id={target_id}: {unexpected}"
                             )
                             break
 
                     if not success:
                         failed += 1
+                        if is_group:
+                            groups_failed += 1
+                        else:
+                            users_failed += 1
 
-                # Required Audit Logging at completion
                 logger.info(
                     f"\n[BROADCAST COMPLETED AUDIT]\n"
                     f"event: broadcast completed\n"
                     f"owner ID: {owner_id}\n"
                     f"total destinations: {total}\n"
+                    f"groups sent: {groups_sent}/{len(group_ids)}\n"
+                    f"users sent: {users_sent}/{len(user_ids)}\n"
                     f"successful sends: {sent}\n"
                     f"failed sends: {failed}\n"
                 )
@@ -160,7 +194,13 @@ class BroadcastService:
                     "sent": sent,
                     "failed": failed,
                     "groups_count": len(group_ids),
+                    "groups_sent": groups_sent,
+                    "groups_failed": groups_failed,
                     "users_count": len(user_ids),
+                    "users_sent": users_sent,
+                    "users_failed": users_failed,
+                    "approved_groups_count": destinations.get("approved_count", 0),
+                    "unapproved_groups_count": destinations.get("unapproved_count", 0),
                 }
 
             finally:

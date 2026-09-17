@@ -27,8 +27,8 @@ def export_zip(target_type="bot", out_file="/tmp/gln-bot.zip"):
             
             for file in files:
                 if file.endswith(excluded_extensions) or file.startswith('.'):
-                    # Include .env.example and .gitignore, but exclude real .env with runtime secrets
-                    if file not in ('.env.example', '.gitignore'):
+                    # Include .env, .env.example, and .gitignore
+                    if file not in ('.env', '.env.example', '.gitignore'):
                         continue
                 
                 rel_path = os.path.relpath(os.path.join(root, file), base_dir)
