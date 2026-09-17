@@ -15,6 +15,7 @@ from bot.database.queries import (
     register_or_update_group,
     register_or_update_user,
     get_all_broadcast_destinations,
+    get_unapproved_groups,
     approve_group,
     get_active_session,
     get_subject_cooldown,
@@ -287,10 +288,36 @@ async def cmd_approvegln(message: Message, bot: Bot, command_args: List[str] = N
     elif message.chat.type in ["group", "supergroup"]:
         target_group_id = message.chat.id
     else:
+        # Private chat without arguments: Show unapproved groups or instructions
+        unapproved = await get_unapproved_groups()
+        if unapproved:
+            buttons = [
+                [
+                    InlineKeyboardButton(
+                        text=f"✅ Approve {grp['group_name'][:25]}",
+                        callback_data=f"approve_grp:{grp['group_id']}",
+                    )
+                ]
+                for grp in unapproved[:8]
+            ]
+            keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+            await message.reply(
+                "📋 <b>Unapproved Groups Waiting for Approval:</b>\n\n"
+                "Tap a group below to approve it instantly, or use:\n"
+                "<code>/approvegln &lt;group_id&gt;</code>\n\n"
+                + "\n".join([f"• <b>{g['group_name']}</b>: <code>{g['group_id']}</code>" for g in unapproved[:8]]),
+                reply_markup=keyboard,
+                parse_mode="HTML",
+            )
+            return
+
         log_command_rejected("No group ID provided for /approvegln in private chat")
         await message.reply(
-            "⚠️ <b>Usage:</b> <code>/approvegln &lt;group_id&gt;</code>\n\n"
-            "Example: <code>/approvegln -1001234567890</code>",
+            "⚠️ <b>How to Approve a Group:</b>\n\n"
+            "<b>Option 1 (Easiest):</b> Add bot to the group, make it admin, and type <code>/approvegln</code> directly in that group.\n\n"
+            "<b>Option 2:</b> In this private chat, specify the Group ID:\n"
+            "<code>/approvegln &lt;group_id&gt;</code>\n\n"
+            "Example:\n<code>/approvegln -1004375206761</code>",
             parse_mode="HTML",
         )
         return
@@ -320,6 +347,46 @@ async def cmd_approvegln(message: Message, bot: Bot, command_args: List[str] = N
         )
     except Exception as e:
         logger.warning(f"Could not deliver approval announcement to group {target_group_id}: {e}")
+
+@commands_router.callback_query(F.data.startswith("approve_grp:"))
+async def on_approve_group_callback(call: CallbackQuery, bot: Bot):
+    """Handles 1-tap group approval button from Owner DM."""
+    user = call.from_user
+    if not user or not is_bot_owner(user.id):
+        await call.answer("❌ Only Bot Owner can approve groups.", show_alert=True)
+        return
+
+    try:
+        grp_id = int(call.data.split(":")[1])
+    except (IndexError, ValueError):
+        await call.answer("❌ Invalid group ID.")
+        return
+
+    await approve_group(grp_id, owner_id=user.id)
+    logger.info(f"Group {grp_id} approved via 1-tap button by owner {user.id}")
+    await call.answer("✅ Group approved successfully!")
+
+    try:
+        await call.message.edit_text(
+            f"✅ <b>Group <code>{grp_id}</code> has been approved successfully!</b>\n"
+            f"Admins in that group can now start quizzes using /choose.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        pass
+
+    try:
+        await bot.send_message(
+            chat_id=grp_id,
+            text=(
+                "✅ <b>This group has been approved by the Bot Owner!</b>\n\n"
+                "Group Admins and Owners can now start a quiz using:\n"
+                "👉 /choose"
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.warning(f"Could not deliver approval announcement to group {grp_id}: {e}")
 
 @commands_router.message(SafeCommand("broadcast"))
 async def cmd_broadcast(message: Message, bot: Bot, command_args_str: str = ""):

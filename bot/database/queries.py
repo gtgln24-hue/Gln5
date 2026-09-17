@@ -215,6 +215,28 @@ async def approve_group(group_id: int, owner_id: int) -> bool:
         await session.commit()
         return True
 
+async def get_unapproved_groups() -> List[Dict[str, Any]]:
+    """Returns a list of groups that are currently registered but unapproved."""
+    async with AsyncSessionLocal() as session:
+        # Get IDs of already approved groups
+        app_res = await session.execute(select(ApprovedGroup.group_id))
+        approved_ids = set(app_res.scalars().all())
+
+        grp_res = await session.execute(
+            select(Group).where(Group.is_approved.is_(False)).order_by(desc(Group.added_at))
+        )
+        groups = grp_res.scalars().all()
+        result = []
+        for g in groups:
+            if g.group_id not in approved_ids:
+                result.append({
+                    "group_id": g.group_id,
+                    "group_name": g.group_name or f"Group {g.group_id}",
+                    "group_username": g.group_username,
+                    "added_at": g.added_at,
+                })
+        return result
+
 async def set_group_admin_status(group_id: int, is_admin: bool):
     async with AsyncSessionLocal() as session:
         grp_res = await session.execute(select(Group).where(Group.group_id == group_id))
