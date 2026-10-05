@@ -40,6 +40,49 @@ class QuestionQueueManager:
         self.used_texts: List[str] = []
         self.prepared_hashes_in_queue: Set[str] = set()
 
+    @staticmethod
+    def _clean_option_text(value: Any) -> str:
+        return " ".join(str(value).strip().split())
+
+    @classmethod
+    def _option_has_ascii_letters(cls, value: Any) -> bool:
+        text = cls._clean_option_text(value)
+        return any((ord(ch) < 128 and ch.isalpha()) for ch in text)
+
+    @classmethod
+    def _option_has_grouping_markers(cls, value: Any) -> bool:
+        text = cls._clean_option_text(value)
+        return any(marker in text for marker in ["(", ")", "/", "[", "]", ":", ","])
+
+    @classmethod
+    def _has_unfair_option_formatting_hint(cls, correct_answer: Any, options: List[Any]) -> bool:
+        """Reject answer sets where the correct option looks visibly different from distractors."""
+        correct_text = cls._clean_option_text(correct_answer)
+        if not correct_text:
+            return False
+
+        other_options = [cls._clean_option_text(opt) for opt in options if cls._clean_option_text(opt) != correct_text]
+        if not other_options:
+            return False
+
+        correct_ascii = cls._option_has_ascii_letters(correct_text)
+        correct_markers = cls._option_has_grouping_markers(correct_text)
+        correct_len = len(correct_text)
+        max_other_len = max(len(opt) for opt in other_options)
+
+        any_other_ascii = any(cls._option_has_ascii_letters(opt) for opt in other_options)
+        any_other_markers = any(cls._option_has_grouping_markers(opt) for opt in other_options)
+
+        # Strong anti-hint checks: correct option contains English/scientific/additional data while distractors do not.
+        if correct_ascii and not any_other_ascii:
+            return True
+        if correct_markers and not any_other_markers:
+            return True
+        if correct_len > max_other_len * 1.5 and (correct_ascii or correct_markers):
+            return True
+
+        return False
+
     async def initialize(self):
         """
         Loads used question history from database for this group and subject,
@@ -141,7 +184,16 @@ class QuestionQueueManager:
                     continue
 
                 # Accepted!
-                prepared = self._prepare_single_question(cand, self.options_count, q_hash)
+                try:
+                    prepared = self._prepare_single_question(cand, self.options_count, q_hash)
+                except ValueError:
+                    logger.warning(
+                        f"Group ID: {self.group_id} | Session ID: {self.session_id} | "
+                        f"Question Number: {index_num} | Question Text: {q_text[:40]} | "
+                        f"Status: REJECTED (Unfair option formatting hint)"
+                    )
+                    continue
+
                 question_queue.append(prepared)
                 self.prepared_hashes_in_queue.add(q_hash)
 
@@ -163,6 +215,7 @@ class QuestionQueueManager:
         - Guarantees correct answer is always included.
         - Randomly shuffles options.
         - Identifies correct letter (A, B, C, D).
+        - Rejects asymmetric option formatting that reveals the answer.
         """
         options = raw_q.get("options", [])
         correct_answer = raw_q.get("correct_answer", "")
@@ -175,6 +228,9 @@ class QuestionQueueManager:
 
         final_options = [correct_answer] + selected_distractors
         random.shuffle(final_options)
+
+        if self._has_unfair_option_formatting_hint(correct_answer, final_options):
+            raise ValueError("Unfair option formatting hint detected in generated question set")
 
         letters = ["A", "B", "C", "D"]
         correct_index = final_options.index(correct_answer)
