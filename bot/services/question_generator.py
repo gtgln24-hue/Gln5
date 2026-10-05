@@ -42,6 +42,7 @@ class QuestionGenerator:
         """
         Calls Gemini API passing previously asked questions/topics.
         Instructs AI to generate questions substantially different from previously accepted ones.
+        ENFORCES STRICT OPTION FORMATTING RULES to prevent unfair hints through formatting.
         """
         api_key = settings.AI_API_KEY
         if not api_key:
@@ -65,6 +66,18 @@ class QuestionGenerator:
                 f"- exam_year (between 2018 and 2024)\n"
                 f"- topic (relevant syllabus topic)\n"
                 f"- source_reference (credible reference)\n\n"
+                f"⚠️ CRITICAL FORMATTING RULES FOR OPTIONS (MUST FOLLOW STRICTLY):\n"
+                f"1. NEVER add extra information ONLY to the correct answer.\n"
+                f"2. ALL FOUR OPTIONS must have IDENTICAL language and formatting style.\n"
+                f"3. NEVER put English translations, scientific names, or pronunciation ONLY in the correct answer.\n"
+                f"4. NEVER put explanations, meanings, synonyms, definitions, or additional details ONLY in the correct answer.\n"
+                f"5. NEVER use brackets, parentheses with extra info, or additional context ONLY in the correct answer.\n"
+                f"6. If scientific names, English text, or pronunciation are necessary for understanding:\n"
+                f"   - Apply them CONSISTENTLY to ALL options where applicable, OR\n"
+                f"   - Keep them in the question itself, NOT in the options.\n"
+                f"7. All options must have COMPARABLE LENGTH and COMPARABLE LEVEL OF DETAIL.\n"
+                f"8. A student should NOT be able to guess the correct answer based on formatting, length, or presence of extra text.\n"
+                f"9. Ensure option formatting does not hint at the answer - rely on knowledge alone.\n\n"
                 f"Output strictly valid JSON array of objects without Markdown code blocks."
             )
 
