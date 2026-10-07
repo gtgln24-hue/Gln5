@@ -39,6 +39,7 @@ class QuestionQueueManager:
         self.used_hashes: Set[str] = set()
         self.used_texts: List[str] = []
         self.prepared_hashes_in_queue: Set[str] = set()
+        self.is_ready = False  # Flag to track if 100 questions are prepared
 
     @staticmethod
     def _clean_option_text(value: Any) -> str:
@@ -93,23 +94,26 @@ class QuestionQueueManager:
 
     async def initialize(self):
         """
-        Loads used question history from database for this group and subject,
-        then prepares exactly 100 unique questions and persists the explicit order to DB.
+        FAST: Only loads used question history from database.
+        Question preparation happens in background via start_background_prep().
         """
         db_hashes = await get_used_question_hashes(self.group_id, self.subject)
         self.used_hashes = set(db_hashes)
         self.used_texts = await get_used_question_texts(self.group_id, self.subject, limit=500)
-        await self.prepare_100_unique_questions(target_count=100)
+        logger.info(f"[INIT FAST] session={self.session_id} loaded {len(self.used_hashes)} used hashes from DB")
 
-        # Persist full 100-question ordered queue to database
+    async def start_background_prep(self):
+        """
+        Prepares 100 unique questions in background without blocking message response.
+        Called immediately after initialize() to start async prep.
+        """
         try:
-            from bot.database.queries import save_session_questions
-            await save_session_questions(self.session_id, self.queue)
-            logger.info(
-                f"Session ID: {self.session_id} | Successfully persisted {len(self.queue)} ordered questions to database."
-            )
+            await self.prepare_100_unique_questions(target_count=100)
+            self.is_ready = True
+            logger.info(f"[BACKGROUND PREP COMPLETE] session={self.session_id} ready with {len(self.queue)} questions")
         except Exception as e:
-            logger.exception(f"Error persisting session questions to database: {e}")
+            logger.exception(f"Error in background question preparation: {e}")
+            self.is_ready = False
 
     async def prepare_100_unique_questions(self, target_count: int = 100):
         """
@@ -217,6 +221,16 @@ class QuestionQueueManager:
             f"Subject: {self.subject} | Queue prepared with {len(self.queue)}/{target_count} unique questions."
         )
 
+        # Persist full 100-question ordered queue to database
+        try:
+            from bot.database.queries import save_session_questions
+            await save_session_questions(self.session_id, self.queue)
+            logger.info(
+                f"Session ID: {self.session_id} | Successfully persisted {len(self.queue)} ordered questions to database."
+            )
+        except Exception as e:
+            logger.exception(f"Error persisting session questions to database: {e}")
+
     def _prepare_single_question(self, raw_q: Dict[str, Any], options_count: int, q_hash: str) -> Dict[str, Any]:
         """
         Formats a question for presentation:
@@ -237,7 +251,7 @@ class QuestionQueueManager:
         final_options = [correct_answer] + selected_distractors
         random.shuffle(final_options)
 
-        if self._is_unfairly_asymmetric(correct_answer, final_options):
+        if self._is_unfair_asymmetry(correct_answer, final_options):
             raise ValueError("Unfair option formatting hint detected in generated question set")
 
         letters = ["A", "B", "C", "D"]
