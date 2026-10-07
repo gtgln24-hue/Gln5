@@ -45,18 +45,24 @@ class QuestionQueueManager:
         return " ".join(str(value).strip().split())
 
     @classmethod
-    def _option_has_ascii_letters(cls, value: Any) -> bool:
+    def _has_ascii_alpha(cls, value: Any) -> bool:
         text = cls._clean_option_text(value)
         return any((ord(ch) < 128 and ch.isalpha()) for ch in text)
 
     @classmethod
-    def _option_has_grouping_markers(cls, value: Any) -> bool:
+    def _has_detail_markers(cls, value: Any) -> bool:
         text = cls._clean_option_text(value)
-        return any(marker in text for marker in ["(", ")", "/", "[", "]", ":", ","])
+        return any(marker in text for marker in ["(", ")", "[", "]", "/", ":", ","])
 
     @classmethod
-    def _has_unfair_option_formatting_hint(cls, correct_answer: Any, options: List[Any]) -> bool:
-        """Reject answer sets where the correct option looks visibly different from distractors."""
+    def _is_unfair_asymmetry(cls, correct_answer: Any, options: List[Any]) -> bool:
+        """
+        Reject only when the correct option is visually or textually distinct from the other options,
+        which would reveal the answer without requiring knowledge.
+
+        This keeps scientific names/English terms allowed when used consistently across all options,
+        but blocks the unfair pattern where only the correct answer contains extra metadata.
+        """
         correct_text = cls._clean_option_text(correct_answer)
         if not correct_text:
             return False
@@ -65,20 +71,22 @@ class QuestionQueueManager:
         if not other_options:
             return False
 
-        correct_ascii = cls._option_has_ascii_letters(correct_text)
-        correct_markers = cls._option_has_grouping_markers(correct_text)
+        correct_ascii = cls._has_ascii_alpha(correct_text)
+        other_ascii = any(cls._has_ascii_alpha(opt) for opt in other_options)
+
+        correct_markers = cls._has_detail_markers(correct_text)
+        other_markers = any(cls._has_detail_markers(opt) for opt in other_options)
+
         correct_len = len(correct_text)
-        max_other_len = max(len(opt) for opt in other_options)
+        other_lengths = [len(opt) for opt in other_options]
+        max_other_len = max(other_lengths) if other_lengths else correct_len
 
-        any_other_ascii = any(cls._option_has_ascii_letters(opt) for opt in other_options)
-        any_other_markers = any(cls._option_has_grouping_markers(opt) for opt in other_options)
-
-        # Strong anti-hint checks: correct option contains English/scientific/additional data while distractors do not.
-        if correct_ascii and not any_other_ascii:
+        # Reject only when the correct option is uniquely different from distractors.
+        if correct_ascii and not other_ascii:
             return True
-        if correct_markers and not any_other_markers:
+        if correct_markers and not other_markers:
             return True
-        if correct_len > max_other_len * 1.5 and (correct_ascii or correct_markers):
+        if correct_ascii and correct_markers and correct_len > max_other_len * 1.4:
             return True
 
         return False
@@ -122,7 +130,7 @@ class QuestionQueueManager:
         question_queue: List[Dict[str, Any]] = []
         self.prepared_hashes_in_queue.clear()
         attempts = 0
-        max_attempts = 20
+        max_attempts = 50
 
         while len(question_queue) < target_count and attempts < max_attempts:
             attempts += 1
@@ -215,7 +223,7 @@ class QuestionQueueManager:
         - Guarantees correct answer is always included.
         - Randomly shuffles options.
         - Identifies correct letter (A, B, C, D).
-        - Rejects asymmetric option formatting that reveals the answer.
+        - Rejects only unfair asymmetry: the correct answer is visibly different from other options.
         """
         options = raw_q.get("options", [])
         correct_answer = raw_q.get("correct_answer", "")
@@ -229,7 +237,7 @@ class QuestionQueueManager:
         final_options = [correct_answer] + selected_distractors
         random.shuffle(final_options)
 
-        if self._has_unfair_option_formatting_hint(correct_answer, final_options):
+        if self._is_unfairly_asymmetric(correct_answer, final_options):
             raise ValueError("Unfair option formatting hint detected in generated question set")
 
         letters = ["A", "B", "C", "D"]
