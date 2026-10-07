@@ -8,21 +8,19 @@ per quiz session without any repetition.
 import json
 import random
 import logging
+import asyncio
 from typing import List, Dict, Any, Set, Optional
+
 from bot.config import settings
 from bot.utils.question_hash import (
-    normalize_question_text,
     generate_question_hash,
-    is_semantically_similar,
 )
 
 logger = logging.getLogger(__name__)
 
-# -------------------------------------------------------------------------
-# Extensive Curated Question Bank across all 8 subjects
-# -------------------------------------------------------------------------
 from bot.data.curated_questions import CURATED_QUESTIONS_BY_SUBJECT
 from bot.services.procedural_generators import generate_procedural_questions
+
 
 class QuestionGenerator:
     """
@@ -81,7 +79,6 @@ class QuestionGenerator:
                 f"Output strictly valid JSON array of objects without Markdown code blocks."
             )
 
-            import asyncio
             loop = asyncio.get_running_loop()
 
             def _call_gemini():
@@ -95,20 +92,18 @@ class QuestionGenerator:
                         logger.warning(f"Failed with model {m}: {model_err}")
                 return None
 
-            response = await loop.run_in_executor(None, _call_gemini)
+            response = await asyncio.wait_for(loop.run_in_executor(None, _call_gemini), timeout=25)
 
             if not response or not response.text:
                 return []
 
             raw_text = response.text.strip()
-            # Handle markdown JSON formatting
             if "```json" in raw_text:
                 raw_text = raw_text.split("```json", 1)[1].split("```", 1)[0]
             elif "```" in raw_text:
                 raw_text = raw_text.split("```", 1)[1].split("```", 1)[0]
             raw_text = raw_text.strip()
 
-            # Find array brackets if surrounded by other text
             start_bracket = raw_text.find("[")
             end_bracket = raw_text.rfind("]")
             if start_bracket != -1 and end_bracket != -1:
@@ -121,6 +116,9 @@ class QuestionGenerator:
                     it["subject"] = subject
                     valid_items.append(it)
             return valid_items
+        except asyncio.TimeoutError:
+            logger.warning(f"AI generation timed out for subject={subject}")
+            return []
         except Exception as e:
             logger.warning(f"AI generation batch failed for {subject}: {e}")
             return []
@@ -132,28 +130,21 @@ class QuestionGenerator:
         used_texts: List[str],
         used_hashes: Set[str],
     ) -> List[Dict[str, Any]]:
-        """
-        Gathers raw candidates from curated pools, procedural algorithms, and AI.
-        """
         candidates: List[Dict[str, Any]] = []
 
-        # 1. Curated questions pool
         curated = CURATED_QUESTIONS_BY_SUBJECT.get(subject, [])
         shuffled_curated = list(curated)
         random.shuffle(shuffled_curated)
         candidates.extend(shuffled_curated)
 
-        # 2. Procedural questions pool (can generate 200+ unique questions per subject)
         proc = generate_procedural_questions(subject, target_count=max(120, needed_count + 40))
         candidates.extend(proc)
 
-        # Filter candidates that are already in used_hashes
         fresh_candidates = [
             c for c in candidates
             if generate_question_hash(c.get("question", "")) not in used_hashes
         ]
 
-        # If fresh candidates from curated/procedural are not enough, generate with AI
         if settings.AI_API_KEY and len(fresh_candidates) < needed_count:
             deficit = needed_count - len(fresh_candidates)
             ai_batch = await self.generate_ai_batch(
@@ -165,5 +156,6 @@ class QuestionGenerator:
 
         random.shuffle(fresh_candidates)
         return fresh_candidates
+
 
 question_generator = QuestionGenerator()
