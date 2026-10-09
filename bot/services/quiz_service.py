@@ -115,8 +115,19 @@ class QuizManager:
 
         logger.info(f"[QUIZ START] session={session_id} question=1/{state.total_questions}")
 
-        # Prepare 100 strictly unique questions in background queue and persist to DB
+        # CRITICAL FIX: Load used question history from database
         await state.queue_manager.initialize()
+        
+        # CRITICAL FIX: Generate 100 unique questions BEFORE sending first question
+        logger.info(f"[QUIZ PREP] session={session_id} generating 100 unique questions...")
+        await state.queue_manager.prepare_100_unique_questions(target_count=100)
+        
+        if len(state.queue_manager.queue) == 0:
+            logger.error(f"[QUIZ ERROR] session={session_id} failed to generate any questions!")
+            # Fall back gracefully
+            pass
+        else:
+            logger.info(f"[QUIZ PREP DONE] session={session_id} generated {len(state.queue_manager.queue)} questions")
 
         # Ensure group is recorded in database
         try:
